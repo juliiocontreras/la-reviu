@@ -1,7 +1,8 @@
 # La Reviú — despliegue del Worker por API (sin wrangler).
 # Bindings: D1 la-reviu + ALLOWED_ORIGIN (Pages). Sin secretos en el primer
-# deploy: GOOGLE_CLIENT_ID/SECRET y RESEND_API_KEY se añaden después con
-# `wrangler secret put` o desde el dashboard (los valores no están en este repo).
+# deploy: RESEND_API_KEY se añade después con `wrangler secret put` o desde
+# el dashboard (el valor no está en este repo). Sin Google OAuth: el acceso
+# de administrador lo crea Julio mismo en /admin.
 import sys, json, urllib.request, uuid
 sys.path.insert(0, "/opt/muse/skills/custom-connector-setup/bin")
 from dynamic_credentials import add_surrogate_to_request

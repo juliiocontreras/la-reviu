@@ -1,32 +1,42 @@
 // La Reviú — Cloudflare Worker (ES module)
 // Backend real de la bitácora de Julio (juliiocontreras/la-reviu).
 // Patrón tomado de TecnicosMX (~/workspace/tecnicosmx-rebuild/worker-turso.js
-// y worker.js): Google OAuth con sesión por cookie, admin por correo,
-// Resend para avisar al dueño. Diferencias con TecnicosMX:
+// y worker.js): sesión por cookie y aviso por Resend. Diferencias:
+//   - Auth: SOLO usuario + contraseña (uso interno, solo Julio). Sin Google
+//     OAuth: el navegador envía SHA-256 de la contraseña y el Worker guarda
+//     SHA-256 de ese hash en D1 (tabla admin_users). El setup de primer uso
+//     (POST /api/auth/setup) solo funciona si aún no existe administrador.
 //   - Almacén PREFERIDO: D1 (binding DB). Sin R2: las fotos/videos de las
 //     reseñas son URLs externas (Unsplash, etc.), no se suben archivos.
 //   - Fallback documentado: Turso por pipeline HTTP Hrana v2, mismo patrón
 //     que TecnicosMX, activo solo si NO hay binding D1 y SÍ hay
 //     TURSO_DATABASE_URL + TURSO_AUTH_TOKEN.
-//   - El frontend vive en GitHub Pages, NO embebido aquí: este Worker solo
+//   - El frontend vive en Pages, NO embebido aquí: este Worker solo
 //     sirve /api/*, por eso hay CORS (origen permitido por env).
 //
 // Bindings / variables de entorno:
 //   DB (D1, preferido) | TURSO_DATABASE_URL + TURSO_AUTH_TOKEN (fallback)
-//   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET (secretos)
 //   RESEND_API_KEY (secreto; heredado del Worker de TecnicosMX solo si se
 //   pone con `wrangler secret put` en ESTE Worker — nunca va en el código)
-//   ALLOWED_ORIGIN (plain text, opcional; por defecto GitHub Pages de Julio)
+//   ALLOWED_ORIGIN (plain text, opcional; por defecto Pages de La Reviú)
 //
-// Admin: juliiocontreras@gmail.com (único usuario con acceso a Studio).
-// Cualquier otro usuario Google autenticado recibe 403 en /api/studio/*.
+// Admin: un solo usuario en admin_users, creado por Julio en /admin.
+// Sin sesión, /api/studio/* responde 401.
 
-const ADMIN_EMAIL = 'juliiocontreras@gmail.com';
 const NOTIFY_TO = 'juliiocontreras@gmail.com';
 const NOTIFY_FROM = 'La Reviú <noreply@tapmarketing.site>'; // Dominio verificado en Resend (plan: solo 3 dominios; la-reviu no cabe sin subir de plan)
 const SESSION_COOKIE = 'reviu_session';
-const OAUTH_STATE_COOKIE = 'reviu_oauth_state';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 días, igual que TecnicosMX
+// Usuario: 3-40 caracteres [A-Za-z0-9._-]. La contraseña viaja como hash
+// SHA-256 en hexadecimal (64 chars) y se guarda SHA-256 de ese hash.
+const USERNAME_RE = /^[A-Za-z0-9._-]{3,40}$/;
+const HASH_RE = /^[0-9a-f]{64}$/;
+const safeEqual = (a, b) => {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+};
 const CATEGORIES = ['Restaurante', 'Bar', 'Turismo', 'Festival', 'Viaje', 'Otro'];
 const REQUEST_STATES = ['Pendiente', 'En contacto', 'En producción', 'Publicado', 'Cerrado'];
 const REVIEW_STATES = ['borrador', 'publicado'];
@@ -133,7 +143,7 @@ const notifyOwner = async (env, req) => {
       html: '<p><strong>' + esc(req.nombre) + '</strong> pide una Reviú para <strong>' + esc(req.lugar) + '</strong> (' + esc(req.categoria) + ').</p>'
         + '<p>Contacto: ' + esc(req.contacto) + '</p>'
         + '<p>' + esc(req.mensaje).replace(/\n/g, '<br>') + '</p>'
-        + '<p><a href="https://la-reviu.pages.dev/#studio">Abrir Studio</a></p>',
+        + '<p><a href="https://la-reviu.pages.dev/admin">Abrir el panel de administración</a></p>',
     }),
   });
   if (!r.ok) {
@@ -152,7 +162,7 @@ const pubReview = x => x ? {
 
 export default {
   async fetch(req, env) {
-    const u = new URL(req.url), p = u.pathname, origin = u.origin;
+    const u = new URL(req.url), p = u.pathname;
     const cors = corsHeaders(req, env);
     const json = (x, s = 200, extra = {}) => J(x, s, { ...cors, ...extra });
 
@@ -171,82 +181,100 @@ export default {
 
     try {
       const store = db(env);
-      const getUser = async () => {
+      // Sesión de administrador: cookie httpOnly con un token aleatorio
+      // cuyo hash vive en admin_sessions (nunca el token en claro).
+      const getAdmin = async () => {
         const t = cookieVal(req, SESSION_COOKIE);
         if (!t) return null;
         return await store.one(
-          'SELECT u.id,u.email,u.google_sub FROM auth_sessions s JOIN auth_users u ON s.user_id=u.id WHERE s.token_hash=? AND s.expires_at>?',
+          'SELECT a.id,a.username FROM admin_sessions s JOIN admin_users a ON s.admin_id=a.id WHERE s.token_hash=? AND s.expires_at>?',
           [await sha(t), Date.now()]) || null;
       };
-      const isAdmin = usr => !!usr && usr.email === ADMIN_EMAIL && !!usr.google_sub;
+      const newSession = async adminId => {
+        const sid = rand();
+        await store.run('INSERT INTO admin_sessions(token_hash,admin_id,expires_at) VALUES(?,?,?)', [await sha(sid), adminId, Date.now() + SESSION_TTL_MS]);
+        return sid;
+      };
+      const sessionCookie = sid => SESSION_COOKIE + '=' + sid + '; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000);
       const requireAdmin = async () => {
-        const usr = await getUser();
-        if (!usr) return { error: json({ error: 'Inicia sesión' }, 401) };
-        if (!isAdmin(usr)) return { error: json({ error: 'Solo el dueño de La Reviú puede usar Studio' }, 403) };
-        return { usr };
+        const adm = await getAdmin();
+        if (!adm) return { error: json({ error: 'Inicia sesión en /admin' }, 401) };
+        return { adm };
       };
 
       // ---- Salud ----
       if (p === '/api/health' && req.method === 'GET') {
         let storeOk = false;
+        let adminConfigured = false;
         try { await store.one('SELECT 1 AS ok'); storeOk = true; } catch {}
+        try { adminConfigured = !!(await store.one('SELECT 1 AS x FROM admin_users LIMIT 1')); } catch {}
         return json({
           ok: true, service: 'la-reviu-api', store: storeKind(env), storeOk,
-          googleConfigured: !!env.GOOGLE_CLIENT_ID && !!env.GOOGLE_CLIENT_SECRET,
+          adminConfigured,
           resendConfigured: !!env.RESEND_API_KEY,
         });
       }
 
-      // ---- Auth Google (igual que TecnicosMX; cookie reviu_session) ----
-      if (p === '/api/auth/google/start' && req.method === 'GET') {
-        if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return json({ error: 'OAuth no configurado' }, 503);
-        const state = rand(), redirect = origin + '/api/auth/google/callback';
-        const q = new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, redirect_uri: redirect, response_type: 'code', scope: 'openid email profile', state, prompt: 'select_account' });
-        const r = new Response(null, { status: 302, headers: { location: 'https://accounts.google.com/o/oauth2/v2/auth?' + q } });
-        r.headers.append('set-cookie', OAUTH_STATE_COOKIE + '=' + state + '; Path=/api/auth/google; HttpOnly; Secure; SameSite=Lax; Max-Age=600');
-        return r;
+      // ---- Auth de administrador: usuario + contraseña (solo /admin) ----
+      // El cliente envía passwordHash = SHA-256 hex de la contraseña; el
+      // servidor guarda SHA-256 de ese hash. La contraseña en claro nunca
+      // viaja ni se guarda.
+      if (p === '/api/auth/status' && req.method === 'GET') {
+        const configured = !!(await store.one('SELECT 1 AS x FROM admin_users LIMIT 1').catch(() => null));
+        const adm = await getAdmin();
+        return json({ configured, authenticated: !!adm, username: adm?.username || null });
       }
-      if (p === '/api/auth/google/callback' && req.method === 'GET') {
-        const state = u.searchParams.get('state'), code = u.searchParams.get('code'), saved = cookieVal(req, OAUTH_STATE_COOKIE);
-        if (!state || !code || state !== saved) return json({ error: 'OAuth state inválido' }, 403);
-        const t = await fetch('https://oauth2.googleapis.com/token', {
-          method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET, redirect_uri: origin + '/api/auth/google/callback', grant_type: 'authorization_code', code }),
-        });
-        if (!t.ok) return json({ error: 'Google rechazó la autorización' }, 401);
-        const token = await t.json();
-        const g = await fetch('https://openidconnect.googleapis.com/v1/userinfo', { headers: { authorization: 'Bearer ' + token.access_token } });
-        if (!g.ok) return json({ error: 'No se verificó la identidad' }, 401);
-        const id = await g.json();
-        if (!id.email_verified || !id.sub || !id.email) return json({ error: 'Correo no verificado' }, 403);
-        const email = id.email.toLowerCase();
-        let row = await store.one('SELECT id,email,google_sub FROM auth_users WHERE google_sub=?', [id.sub]);
-        if (!row) {
-          const existing = await store.one('SELECT id,google_sub FROM auth_users WHERE email=?', [email]);
-          if (existing?.google_sub && existing.google_sub !== id.sub) return json({ error: 'Cuenta vinculada a otro Google' }, 409);
-          const uid = existing?.id || crypto.randomUUID();
-          if (existing) await store.run('UPDATE auth_users SET google_sub=?,email_verified=1 WHERE id=?', [id.sub, uid]);
-          else await store.run('INSERT INTO auth_users(id,email,password_hash,email_verified,google_sub,created_at) VALUES(?,?,NULL,1,?,?)', [uid, email, id.sub, new Date().toISOString()]);
-          row = { id: uid, email };
+      if (p === '/api/auth/setup' && req.method === 'POST') {
+        const existing = await store.one('SELECT 1 AS x FROM admin_users LIMIT 1').catch(() => null);
+        if (existing) return json({ error: 'El acceso de administrador ya está creado' }, 403);
+        const d = await req.json().catch(() => ({}));
+        const username = clean(d.username, 40).toLowerCase();
+        const passwordHash = clean(d.passwordHash, 64).toLowerCase();
+        if (!USERNAME_RE.test(username)) return json({ error: 'Usuario inválido: 3-40 caracteres (letras, números, punto, guion y guion bajo)' }, 400);
+        if (!HASH_RE.test(passwordHash)) return json({ error: 'Contraseña inválida' }, 400);
+        const id = crypto.randomUUID();
+        await store.run(
+          'INSERT INTO admin_users(id,username,password_hash,created_at) VALUES(?,?,?,?)',
+          [id, username, await sha(passwordHash), new Date().toISOString()]);
+        const sid = await newSession(id);
+        return json({ ok: true, username }, 201, { 'set-cookie': sessionCookie(sid) });
+      }
+      if (p === '/api/auth/login' && req.method === 'POST') {
+        const d = await req.json().catch(() => ({}));
+        const username = clean(d.username, 40).toLowerCase();
+        const passwordHash = clean(d.passwordHash, 64).toLowerCase();
+        const row = await store.one('SELECT id,username,password_hash FROM admin_users WHERE username=?', [username]).catch(() => null);
+        if (!row || !HASH_RE.test(passwordHash) || !safeEqual(row.password_hash, await sha(passwordHash))) {
+          return json({ error: 'Usuario o contraseña incorrectos' }, 401);
         }
-        const sid = rand();
-        await store.run('INSERT INTO auth_sessions(token_hash,user_id,expires_at) VALUES(?,?,?)', [await sha(sid), row.id, Date.now() + SESSION_TTL_MS]);
-        // Vuelve al frontend (GitHub Pages) en la sección Studio. Si el
-        // Worker sirve el mismo origen, el hash basta; si no, el cliente
-        // debe redirigir con ?studio=1 (ver api-client-snippet.js).
-        const back = (env.ALLOWED_ORIGIN || 'https://la-reviu.pages.dev/la-reviu') + '/#studio';
-        const r = new Response(null, { status: 302, headers: { location: back } });
-        r.headers.append('set-cookie', SESSION_COOKIE + '=' + sid + '; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000));
-        r.headers.append('set-cookie', OAUTH_STATE_COOKIE + '=; Path=/api/auth/google; HttpOnly; Secure; SameSite=Lax; Max-Age=0');
-        return r;
+        const sid = await newSession(row.id);
+        return json({ ok: true, username: row.username }, 200, { 'set-cookie': sessionCookie(sid) });
       }
       if (p === '/api/auth/me' && req.method === 'GET') {
-        const usr = await getUser();
-        return json({ user: usr ? { id: usr.id, email: usr.email, admin: isAdmin(usr) } : null });
+        const adm = await getAdmin();
+        return json({ user: adm ? { id: adm.id, username: adm.username, admin: true } : null });
+      }
+      if (p === '/api/auth/change-password' && req.method === 'POST') {
+        const { error, adm } = await requireAdmin();
+        if (error) return error;
+        const d = await req.json().catch(() => ({}));
+        const currentHash = clean(d.currentPasswordHash, 64).toLowerCase();
+        const newHash = clean(d.newPasswordHash, 64).toLowerCase();
+        if (!HASH_RE.test(currentHash) || !HASH_RE.test(newHash)) return json({ error: 'Contraseña inválida' }, 400);
+        if (currentHash === newHash) return json({ error: 'La contraseña nueva debe ser distinta a la actual' }, 400);
+        const row = await store.one('SELECT password_hash FROM admin_users WHERE id=?', [adm.id]);
+        if (!row || !safeEqual(row.password_hash, await sha(currentHash))) {
+          return json({ error: 'La contraseña actual no coincide' }, 401);
+        }
+        await store.run('UPDATE admin_users SET password_hash=? WHERE id=?', [await sha(newHash), adm.id]);
+        // Cierra las demás sesiones del administrador; la actual sigue.
+        const t = cookieVal(req, SESSION_COOKIE);
+        await store.run('DELETE FROM admin_sessions WHERE admin_id=? AND token_hash!=?', [adm.id, t ? await sha(t) : '']);
+        return json({ ok: true });
       }
       if (p === '/api/auth/logout' && req.method === 'POST') {
         const t = cookieVal(req, SESSION_COOKIE);
-        if (t) await store.run('DELETE FROM auth_sessions WHERE token_hash=?', [await sha(t)]);
+        if (t) await store.run('DELETE FROM admin_sessions WHERE token_hash=?', [await sha(t)]);
         return new Response(JSON.stringify({ ok: true }), {
           headers: { 'content-type': 'application/json', ...cors, 'set-cookie': SESSION_COOKIE + '=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0' },
         });

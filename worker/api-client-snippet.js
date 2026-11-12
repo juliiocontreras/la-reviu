@@ -84,11 +84,12 @@ const loadPublicReviews = async ({ categoria = '', limit = 50 } = {}) => {
   }
 };
 
-// --- Auth de Studio (solo el dueño, Google OAuth) ---------------------------
-// Uso: al entrar a #studio, llamar a reviuMe(). Si user?.admin, cargar Studio
-// desde la API; si no, mostrar el botón "Entrar con Google" que apunta a
-// REVIU_API_BASE + '/api/auth/google/start'. Cualquier otro usuario Google
-// autenticado verá 403 en Studio: es el comportamiento correcto.
+// --- Auth de administrador (solo Julio, usuario + contraseña, solo /admin)
+// La contraseña nunca viaja en claro: la página calcula SHA-256 en el
+// navegador y envía solo el hash; el Worker guarda SHA-256 de ese hash.
+// Primer uso: POST /api/auth/setup (solo si aún no existe administrador).
+// Después: POST /api/auth/login, GET /api/auth/me, POST /api/auth/logout,
+// POST /api/auth/change-password (con sesión). Sesión en cookie httpOnly.
 const reviuMe = async () => {
   try { const { user } = await reviuApi('/api/auth/me'); return user; }
   catch { return null; }
@@ -97,8 +98,8 @@ const reviuLogout = async () => {
   await reviuApi('/api/auth/logout', { method: 'POST' }).catch(() => {});
 };
 
-// --- Studio: solicitudes y reseñas (solo admin; 401 sin sesión, 403 si no
-// es el dueño). Las funciones lanzan Error con el mensaje del servidor. ------
+// --- Studio: solicitudes y reseñas (solo admin; 401 sin sesión).
+// Las funciones lanzan Error con el mensaje del servidor. ------
 const studioListRequests = (estado = '') =>
   reviuApi('/api/studio/requests' + (estado ? '?estado=' + encodeURIComponent(estado) : ''));
 const studioSetRequestStatus = (id, estado) =>

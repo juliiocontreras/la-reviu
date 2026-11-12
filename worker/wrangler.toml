@@ -1,4 +1,4 @@
-# La Reviú — Worker de Cloudflare (D1 + Google OAuth + Resend)
+# La Reviú — Worker de Cloudflare (D1 + auth usuario/contraseña + Resend)
 name = "la-reviu"
 main = "worker.js"
 compatibility_date = "2025-04-01"
@@ -15,5 +15,6 @@ database_id = "e85f2197-22ce-4b98-9a7a-1d82302a9458"
 # llamadas fetch por CORS.
 ALLOWED_ORIGIN = "https://la-reviu.pages.dev"
 
-# Secretos (NUNCA aquí): GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
-# RESEND_API_KEY -> `wrangler secret put <NOMBRE>` en este Worker.
+# Secretos (NUNCA aquí): RESEND_API_KEY -> `wrangler secret put <NOMBRE>`
+# en este Worker. Sin Google OAuth: el acceso de administrador (usuario +
+# contraseña) lo crea Julio mismo en /admin; no hay claves que configurar.

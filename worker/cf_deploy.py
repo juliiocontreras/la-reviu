@@ -1,12 +1,9 @@
 import sys, json, urllib.request, uuid
-# La Reviú — despliegue del Worker (NO ejecutado aún).
-# Copia el patrón de ~/workspace/tecnicosmx-rebuild/cf_deploy_turso.py:
-# multipart PUT a la API de Cloudflare con metadata + worker.js.
-# ANTES DE EJECUTARLO hay que rellenar D1_ID (paso 1 del README) y poner los
-# secretos en ESTE Worker con `wrangler secret put` (paso 3): los bindings
-# "inherit" solo heredan secretos que YA existan en este script, y en un
-# script nuevo no existe ninguno, así que el primer deploy con inherit
-# fallaría. Ver README.md.
+# La Reviú — despliegue del Worker (OBSOLETO: no ejecutar).
+# Usar `python3 deploy-worker.py` (mismo patrón, sin bindings heredados).
+# Este archivo quedó desactualizado en la reestructura 2026-11-12: hereda
+# GOOGLE_CLIENT_ID/SECRET (OAuth eliminado) y apunta ALLOWED_ORIGIN a una
+# ruta /la-reviu que ya no existe.
 sys.path.insert(0, "/opt/muse/skills/custom-connector-setup/bin")
 from dynamic_credentials import add_surrogate_to_request
 class NoRedirect(urllib.request.HTTPRedirectHandler):

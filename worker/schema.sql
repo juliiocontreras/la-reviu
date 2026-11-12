@@ -39,18 +39,23 @@ CREATE TABLE IF NOT EXISTS reviews (
 CREATE INDEX IF NOT EXISTS idx_reviews_status ON reviews(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_reviews_category ON reviews(category);
 
--- Auth Google (mismo modelo que TecnicosMX: sin contraseña, solo Google).
-CREATE TABLE IF NOT EXISTS auth_users (
+-- Acceso de administrador (usuario + contraseña, solo /admin).
+-- La contraseña NUNCA se guarda en claro: el navegador envía SHA-256 de la
+-- contraseña y el Worker guarda SHA-256 de ese hash (columna password_hash).
+-- El setup de primer uso (POST /api/auth/setup) solo funciona si esta tabla
+-- está vacía; después queda desactivado para siempre.
+CREATE TABLE IF NOT EXISTS admin_users (
   id TEXT PRIMARY KEY,
-  email TEXT NOT NULL UNIQUE,
-  password_hash TEXT,
-  email_verified INTEGER NOT NULL DEFAULT 0,
-  google_sub TEXT UNIQUE,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE TABLE IF NOT EXISTS auth_sessions (
+CREATE TABLE IF NOT EXISTS admin_sessions (
   token_hash TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES auth_users(id),
+  admin_id TEXT NOT NULL REFERENCES admin_users(id),
   expires_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON auth_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_admin_sessions_admin ON admin_sessions(admin_id);
+
+-- Tablas auth_users / auth_sessions (Google OAuth) se retiraron en la
+-- reestructura 2026-11-12: ya existen en D1 pero el Worker ya no las usa.
