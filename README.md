@@ -12,15 +12,40 @@ viajes y festivales. Un solo `index.html` + `logo-reviu.svg`.
 ## Estructura del sitio
 
 Navegación superior con 4 pestañas: **Portada**, **Revius**, **Tienda**,
-**Solicita una reviú**.
+**Solicita** (la pestaña dice solo "Solicita"; la sección se sigue llamando
+"Solicita una Reviú").
 
 - **Revius** es una sola pestaña que integra tres sub-secciones con
   sub-navegación interna: **Reseñas** (buscador + filtros por categoría,
   alimentadas de `GET /api/reviews`), **Lugares** (índice real por categoría)
   y **Lives** (qué sigue + estado cuando no hay live programado).
-- **Tienda:** merch en preparación, sin catálogo fingido.
+- **Tienda:** merch en preparación, sin catálogo fingido. Incluye un
+  formulario "Avísame cuando haya merch" (nombre + contacto) que guarda un
+  aviso en la API como solicitud con `[AVISO MERCH]`, para que Julio sepa
+  a quién avisar cuando las piezas estén listas.
 - **Solicita una reviú:** formulario que guarda en la API (con respaldo
   offline en `localStorage`) y muestra seguimiento ("Tus solicitudes").
+
+## Upgrade 4.0 (todo el sitio, 2026-11-12)
+
+- **Diseño:** pie con navegación rápida (Portada · Revius · Tienda ·
+  Solicita), compartir y Facebook; jerarquía y estados pulidos en todas las
+  secciones; misma marca (amarillo #ffd02a, tinta, papel, boletos).
+- **Contenido y secciones:** Lives y Tienda ya no son callejones sin salida:
+  cada una tiene un formulario de aviso ("Avísame del próximo live" /
+  "Avísame cuando haya merch") que reutiliza `POST /api/requests` con
+  `[AVISO LIVE]` / `[AVISO MERCH]` en el mensaje. Sin fechas ni lives
+  inventados: si no hay live programado, se dice así y se ofrece el aviso.
+- **Funciones:** SEO (canonical, Open Graph, Twitter Card, JSON-LD
+  WebSite/Organization con datos reales), rendimiento (preload del póster
+  del hero, preconnect a la API y a Unsplash), compartir real (Web Share
+  API con respaldo de copiar enlace) en el hero, en cada reseña publicada
+  y en el pie, accesibilidad (`aria-current` en pestaña y sub-navegación
+  activas), y PWA (`site.webmanifest` + iconos 192/512 PNG generados del
+  logo oficial + `apple-touch-icon` 180).
+- **Pestaña del menú:** "Solicita una reviú" se acortó a solo "Solicita"
+  (pedido de Julio 2026-11-12 19:19 CST; solo el menú, la sección y los
+  botones conservan el nombre completo).
 
 ## Panel de administración (`/admin`)
 
@@ -53,10 +78,12 @@ El repo es la fuente, pero el despliegue en vivo NO es automático todavía:
 `git push` a `main` no redespliega Pages. Para publicar un cambio:
 
 ```sh
-mkdir -p ~/workspace/la-reviu-deploy-ronda
-cp index.html logo-reviu.svg julio-reviu.mp4 julio-reviu.webp julio-reviu.webm ~/workspace/la-reviu-deploy-ronda/
-npx wrangler pages deploy ~/workspace/la-reviu-deploy-ronda --project-name la-reviu --commit-dirty=true
+python3 ~/workspace/la-reviu-deploy.py
 ```
+El script copia `index.html`, `logo-reviu.svg`, `julio-reviu.mp4`,
+`julio-reviu.webp`, `julio-reviu.webm`, `site.webmanifest` e iconos a un
+directorio de staging y despliega con
+`npx wrangler pages deploy <dir> --project-name la-reviu --commit-dirty=true`.
 
 (El token va por surrogate con la credencial `custom.cloudflare`; la API
 directa de manifest falla porque wrangler usa hashes BLAKE3, no SHA-256.
