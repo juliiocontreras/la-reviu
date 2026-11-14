@@ -146,6 +146,49 @@ fallback elegante (poster + mensaje) si no carga.
   flechas tipográficas (↗ → ↓) y la ✕ de cerrar. Verificación con grep de
   los rangos U+1F000–U+1FAFF y U+2600–U+27BF antes de entregar.
 
+## SEO (ronda 5.0, 2026-11-14)
+
+- **Técnico:** `robots.txt` (permite todo, referencia el sitemap) y
+  `sitemap.xml` (solo la URL real que existe: `https://la-reviu.pages.dev/` —
+  el sitio es una sola página; las secciones con hash no son páginas
+  separadas). Ambos son archivos estáticos en la raíz del repo y los sirve
+  Pages (antes, pedirlos devolvía el HTML por el fallback SPA).
+- **On-page:** título y meta descripción con las palabras de la propia copia
+  del sitio (reseñas, restaurantes, bares, viajes, festivales, experiencias);
+  sin relleno de keywords y sin geografía inventada. Un solo `h1`,
+  `lang="es"`, `alt` en todas las imágenes, enlaces con texto descriptivo.
+- **Datos estructurados:** JSON-LD con `@graph` (WebSite + Organization +
+  CollectionPage de Revius + BreadcrumbList Portada → Revius). Los esquemas
+  Review/ItemList se generan SOLO desde reseñas reales de `GET /api/reviews`
+  (función `renderReviewJsonLd`); hoy la lista está vacía, así que no se
+  emite nada falso — aparecen solos cuando Julio publique la primera reseña.
+- **Rendimiento:** el video del hero quedó con una sola fuente (mp4; el
+  navegador descargaba mp4 + webm, ~1,6 MB en total — ahora ~0,7 MB).
+  Póster con `preload` + `fetchpriority="high"`, `width`/`height` en el video
+  para evitar saltos de layout, imágenes de inspiración con `loading="lazy"`.
+  Medición local con `~/workspace/.qa-render/la-reviu-perf.mjs`.
+- **Geografía (pregunta abierta para Julio):** el sitio no declara ninguna
+  ciudad. Si quiere posicionar explícitamente Saltillo/Coahuila, hay que
+  confirmarlo: cambiaría el título, la descripción y el JSON-LD, y la
+  primera reseña real debería ser de un lugar de Saltillo.
+
+### Google Search Console (pasos para Julio, sin ejecutar)
+
+Ninguna acción en cuentas de Google está hecha; estos pasos los hace Julio
+(o Musie con su sesión) cuando quiera:
+
+1. Entrar a https://search.google.com/search-console y agregar la propiedad
+   `https://la-reviu.pages.dev/` (tipo "Prefijo de URL").
+2. Verificar la propiedad por **archivo HTML**: Search Console da un archivo
+   `googleXXXXXXXXXXXX.html` para subir a la raíz del repo (igual que un
+   asset: se sube a GitHub y se redespliega Pages) y luego "Verificar".
+   Alternativa cuando exista el dominio propio: verificación por **DNS**
+   (registro TXT en el proveedor del dominio).
+3. En Search Console → Sitemaps, enviar
+   `https://la-reviu.pages.dev/sitemap.xml` y pedir la indexación de `/`.
+4. Revisar en unos días: cobertura (páginas indexadas), experiencia en
+   móviles y las consultas por las que aparece el sitio.
+
 ## Dominio
 
 No hay dominio `lareviu` registrado: Julio lo compra después. Ver
